@@ -1,48 +1,44 @@
 package com.example.qrcodescannerapp
 
 import android.os.Bundle
-import android.content.Intent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.qrcodescannerapp.ui.theme.QRCodeScannerAppTheme
-import com.google.zxing.integration.android.IntentIntegrator
-import com.google.zxing.integration.android.IntentResult
-import okhttp3.*
+import okhttp3.Callback
+import okhttp3.FormBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import java.io.IOException
 
 class MainActivity : ComponentActivity() {
     private var scannedProductDataList = mutableStateListOf<String>()
     private var warehouseCode by mutableStateOf("")
     private var isWarehouseScan by mutableStateOf(false)
-
-    private val qrScannerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val intentResult = IntentIntegrator.parseActivityResult(result.resultCode, result.data)
-        if (intentResult != null) {
-            if (intentResult.contents == null) {
-                // 사용자가 QR 코드 스캔을 취소한 경우
-            } else {
-                handleQRCodeResult(intentResult)
-            }
-        } else {
-            Toast.makeText(this, "QR 코드 스캔 실패", Toast.LENGTH_SHORT).show()
-        }
-    }
+    private var isScanning by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,13 +69,28 @@ class MainActivity : ComponentActivity() {
                         }
                         // 추가된 부분: Box와 ProductScanButton 사이에 공간 확보
                         Spacer(modifier = Modifier.height(32.dp))
-                        // 기존 내용들
+
+                        // 스캔 버튼
                         ProductScanButton(::startProductScanner)
+                        if (isScanning && !isWarehouseScan) {
+                            ScanningStatus(isScanning)
+                            ProductScanInput(::handleQRCodeResult)
+                        }
+
                         QRCodeList(scannedProductDataList)
+
                         Spacer(modifier = Modifier.height(16.dp))
+
                         WarehouseCodeScanButton(::startWarehouseCodeScanner)
+                        if (isScanning && isWarehouseScan) {
+                            ScanningStatus(isScanning)
+                            WarehouseCodeInput(::handleQRCodeResult)
+                        }
+
                         Text(text = "$warehouseCode")
+
                         Spacer(modifier = Modifier.height(16.dp))
+
                         ActionButtons(::sendDataToServer, ::clearList, ::finish)
                     }
                 }
@@ -89,32 +100,22 @@ class MainActivity : ComponentActivity() {
 
     private fun startWarehouseCodeScanner() {
         isWarehouseScan = true
-        val integrator = IntentIntegrator(this)
-        integrator.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-        integrator.setPrompt("QR Code Scanner Product by EZTAKE")
-        integrator.setCameraId(0)
-        integrator.setBeepEnabled(true)
-        integrator.setBarcodeImageEnabled(true)
-        qrScannerLauncher.launch(integrator.createScanIntent())
+        isScanning = true
     }
 
     private fun startProductScanner() {
         isWarehouseScan = false
-        val integrator = IntentIntegrator(this)
-        integrator.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-        integrator.setPrompt("QR Code Scanner Product by EZTAKE")
-        integrator.setCameraId(0)
-        integrator.setBeepEnabled(true)
-        integrator.setBarcodeImageEnabled(true)
-        qrScannerLauncher.launch(integrator.createScanIntent())
+        isScanning = true
     }
 
-    private fun handleQRCodeResult(result: IntentResult) {
+    private fun handleQRCodeResult(scannedData: String) {
         if (isWarehouseScan) {
-            warehouseCode = result.contents
+            warehouseCode = scannedData
         } else {
-            scannedProductDataList.add(result.contents)
+            scannedProductDataList.add(scannedData)
         }
+        // 스캔이 완료된 후에도 다시 스캔 대기 상태로 돌아가도록 설정
+        isScanning = true
     }
 
     private fun sendDataToServer() {
@@ -137,14 +138,13 @@ class MainActivity : ComponentActivity() {
             .build()
 
         client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
+            override fun onFailure(call: okhttp3.Call, e: IOException) {
                 e.printStackTrace()
                 runOnUiThread {
                     Toast.makeText(applicationContext, "데이터 전송 실패: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
-
-            override fun onResponse(call: Call, response: Response) {
+            override fun onResponse(call: okhttp3.Call, response: Response) {
                 if (response.isSuccessful) {
                     runOnUiThread {
                         Toast.makeText(applicationContext, "데이터 전송 완료", Toast.LENGTH_SHORT).show()
@@ -164,6 +164,117 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, "목록이 초기화되었습니다.", Toast.LENGTH_SHORT).show()
     }
 
+
+
+    @Composable
+    fun ScanningStatus(isScanning: Boolean) {
+        if (isScanning) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x80000000), shape = RoundedCornerShape(8.dp))
+                    .padding(16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "스캔 대기 중...",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+
+
+    @Composable
+    fun ProductScanInput(onProductScanned: (String) -> Unit) {
+        var scannedData by remember { mutableStateOf("") }
+        val focusRequester = remember { FocusRequester() }  // FocusRequester 생성
+
+        // 스캔 버튼을 눌렀을 때 텍스트 필드에 포커스 자동으로 이동
+        LaunchedEffect(Unit) {
+            focusRequester.requestFocus()
+        }
+
+        TextField(
+            value = scannedData,
+            onValueChange = { newValue ->
+                scannedData = newValue
+                if (newValue.isNotBlank()) {
+                    onProductScanned(newValue)
+                    scannedData = ""  // 입력 필드 초기화
+                    // 입력 완료 후 다시 포커스 요청해 다음 스캔 대기
+                    focusRequester.requestFocus()
+                }
+            },
+            keyboardOptions = KeyboardOptions(
+                imeAction = ImeAction.Done,
+                keyboardType = KeyboardType.Text
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.Transparent)
+                .focusRequester(focusRequester),  // 포커스 설정
+            singleLine = true,
+            placeholder = { Text(text = "스캔된 제품 정보를 입력하세요") }
+        )
+    }
+
+    @Composable
+    fun WarehouseCodeInput(onWarehouseScanned: (String) -> Unit) {
+        var scannedData by remember { mutableStateOf("") }
+        val focusRequester = remember { FocusRequester() }
+
+        // 스캔 버튼을 눌렀을 때 텍스트 필드에 포커스 자동으로 이동
+        LaunchedEffect(Unit) {
+            focusRequester.requestFocus()
+        }
+
+        TextField(
+            value = scannedData,
+            onValueChange = { newValue ->
+                scannedData = newValue
+                if (newValue.isNotBlank()) {
+                    onWarehouseScanned(newValue)
+                    scannedData = ""  // 입력 필드 초기화
+                    // 입력 완료 후 다시 포커스 요청해 다음 스캔 대기
+                    focusRequester.requestFocus()
+                }
+            },
+            keyboardOptions = KeyboardOptions(
+                imeAction = ImeAction.Done,
+                keyboardType = KeyboardType.Text
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.Transparent)
+                .focusRequester(focusRequester),  // 포커스 설정
+            singleLine = true,
+            placeholder = { Text(text = "스캔된 창고 코드를 입력하세요") }
+        )
+    }
+
+    @Composable
+    fun ProductScanButton(onClick: () -> Unit) {
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            Button(
+                onClick = onClick,
+                modifier = Modifier
+                    .width(300.dp)
+                    .padding(vertical = 24.dp)
+            ) {
+                Text(
+                    text = "품목정보스캔",
+                    fontSize = 22.sp
+                )
+            }
+        }
+    }
+
     @Composable
     fun WarehouseCodeScanButton(onClick: () -> Unit) {
         Box(
@@ -178,32 +289,11 @@ class MainActivity : ComponentActivity() {
             ) {
                 Text(
                     text = "적재위치스캔",
-                    fontSize = 22.sp  // 텍스트 폰트 사이즈 조절 (예: 18sp)
+                    fontSize = 22.sp
                 )
             }
         }
     }
-
-    @Composable
-    fun ProductScanButton(onClick: () -> Unit) {
-        Box(
-            modifier = Modifier.fillMaxWidth(),
-            contentAlignment = Alignment.Center
-        ) {
-            Button(
-                onClick = onClick,
-                modifier = Modifier
-                    .width(300.dp)  // 원하는 고정 너비로 설정
-                    .padding(vertical = 24.dp)
-            ) {
-                Text(
-                    text = "품목정보스캔",
-                    fontSize = 22.sp  // 텍스트 폰트 사이즈 조절
-                )
-            }
-        }
-    }
-
 
     @Composable
     fun QRCodeList(scannedDataList: List<String>) {
